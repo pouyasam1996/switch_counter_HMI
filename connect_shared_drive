@@ -1,0 +1,77 @@
+Raspberry Pi SMB Share Connection Guide
+This guide outlines the steps to connect a Raspberry Pi running Linux to a Windows/Samba (SMB) shared drive (\\pnp-fs\pnp-share or //192.168.20.27/pnp-share) and automate mounting at boot.
+Prerequisites
+
+Raspberry Pi running Linux (e.g., Ubuntu or Raspberry Pi OS).
+Network access to the SMB share (192.168.20.27).
+Valid credentials for the share (username: pnppharma\pouya.samandi, password: @Ghjkl;').
+Administrative (sudo) privileges.
+
+Steps
+
+Update the System and Install cifs-utilsUpdate package lists and install the required package for SMB mounting:
+sudo apt update
+sudo apt install cifs-utils
+
+
+Create a Mount PointCreate a directory where the shared drive will be mounted:
+sudo mkdir /mnt/shared
+
+
+Create a Credentials FileStore the SMB credentials securely:
+sudo nano /etc/smbcredentials
+
+Add the following content:
+domain=pnppharma
+username=pouya.samandi
+password=@Ghjkl;'
+
+Save (Ctrl+O, Enter, Ctrl+X) and secure the file:
+sudo chmod 600 /etc/smbcredentials
+
+
+Test Manual MountingMount the share to verify connectivity:
+sudo mount -t cifs //192.168.20.27/pnp-share /mnt/shared -o credentials=/etc/smbcredentials,iocharset=utf8,sec=ntlmssp,file_mode=0660,dir_mode=0770,uid=pnppharma,gid=pnppharma
+
+Check if files (e.g., Maintenance) are accessible:
+ls /mnt/shared
+
+
+Automate Mounting at BootEdit the /etc/fstab file to mount the share automatically:
+sudo nano /etc/fstab
+
+Add this line at the end:
+//192.168.20.27/pnp-share /mnt/shared cifs credentials=/etc/smbcredentials,iocharset=utf8,sec=ntlmssp,_netdev,file_mode=0660,dir_mode=0770,uid=pnppharma,gid=pnppharma 0 0
+
+Save and exit.
+
+Test fstab ConfigurationTest the configuration without rebooting:
+sudo mount -a
+ls /mnt/shared
+
+Ensure no errors occur and files are visible.
+
+Reboot to ConfirmReboot the Raspberry Pi to verify automatic mounting:
+sudo reboot
+
+After reboot, check the mount:
+ls /mnt/shared
+
+
+
+Troubleshooting
+
+Credentials Error: Verify the contents of /etc/smbcredentials match the format above. Ensure the password (@Ghjkl;') is correct.
+Mount Failure: Check network connectivity to 192.168.20.27. Use ping 192.168.20.27 to test.
+Permission Issues: If folders like Maintenance are inaccessible, the server may have restricted permissions. Run:smbclient -L //192.168.20.27 -U pnppharma\\pouya.samandi
+
+Contact the server admin if permissions are restricted.
+fstab Errors: Backup /etc/fstab before editing:sudo cp /etc/fstab /etc/fstab.bak
+
+If the system fails to boot, restore the backup or fix syntax errors in /etc/fstab.
+
+Notes
+
+The file_mode=0660,dir_mode=0770 settings may limit access. For broader read/write access, change to file_mode=0777,dir_mode=0777 in /etc/fstab and remount with sudo mount -a.
+Ensure the user and group pnppharma exist on the Raspberry Pi. If not, replace uid=pnppharma,gid=pnppharma with uid=1000,gid=1000 (default user ID/group ID for the primary user, e.g., ubuntu).
+

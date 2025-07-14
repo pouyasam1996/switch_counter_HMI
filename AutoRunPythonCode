@@ -1,0 +1,148 @@
+Running a Background Program & Toggling It with a Physical Switch
+Raspberry Pi • systemd • libgpiod (GPIO)
+
+1 What You’ll Build
+A Python listener that watches a push-button on any GPIO pin.
+
+On each press it starts a long-running job (e.g., a GStreamer/Hailo pipeline).
+
+On the next press it stops that job.
+
+The listener itself is launched automatically at boot by systemd and runs in the background forever.
+
+2 Hardware Wiring
+Function	BCM Pin	Physical Pin	Notes
+Switch	11	23	Connect between pin 23 and a GND pin.
+Pull-ups	—	—	We use the SoC’s internal pull-up; no external resistor needed.
+
+3 Software Prerequisites
+bash
+Copy
+Edit
+sudo apt update
+sudo apt install python3-gpiod  # libgpiod bindings
+# (plus any runtime libs your target program needs)
+Give your user permission to access GPIO, video, etc.
+
+bash
+Copy
+Edit
+sudo usermod -aG gpio,video,render $USER
+Log out/in or reboot once.
+
+4 Listener Script (switch_listener.py)
+python
+Copy
+Edit
+#!/usr/bin/env python3
+import gpiod, subprocess, os, signal, time
+
+CHIP_NAME  = "gpiochip4"      # use `gpiodetect` & `gpioinfo` to confirm
+SWITCH_PIN = 11               # BCM number (physical 23)
+DEBOUNCE   = 0.30             # seconds
+
+CMD = (
+    ". /home/USER/my_app/setup_env.sh && "
+    "python /home/USER/my_app/my_main.py --arg1 foo --arg2 bar"
+)
+
+chip  = gpiod.Chip(CHIP_NAME)
+line  = chip.get_line(SWITCH_PIN)
+line.request(
+    consumer="Switch",
+    type=gpiod.LINE_REQ_EV_FALLING_EDGE,
+    flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP
+)
+
+proc, last = None, 0.0
+
+def toggle():
+    global proc
+    if proc is None or proc.poll() is not None:        # start
+        proc = subprocess.Popen(
+            ["/bin/bash", "-c", CMD],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid                       # new process group
+        )
+        print(f"Started job (PID {proc.pid})")
+    else:                                              # stop
+        print("Stopping job…")
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        print("Job stopped")
+        proc = None
+
+print("Listener ready — press the button to start/stop the job")
+try:
+    while True:
+        if line.event_wait(1):
+            line.event_read()
+            now = time.monotonic()
+            if now - last >= DEBOUNCE:
+                toggle()
+                last = now
+finally:
+    if proc and proc.poll() is None:
+        os.killpg(proc.pid, signal.SIGTERM)
+    line.release()
+    chip.close()
+5 systemd Service (/etc/systemd/system/switch_listener.service)
+ini
+Copy
+Edit
+[Unit]
+Description=GPIO Switch Listener
+After=network.target
+
+
+
+ /etc/systemd/system/main_app.service               
+ [Service]
+ Type=simple
+ User=pnppharma
+ Group=pnppharma
+ WorkingDirectory=/home/pnppharma/Desktop/switch_detector>
+ Environment=DISPLAY=:0
+ Environment=XDG_RUNTIME_DIR=/run/user/1000
+ ExecStartPre=/bin/sleep 5
+ ExecStart=/usr/bin/python3 /home/pnppharma/Desktop/switc>
+ Restart=on-failure
+ RestartSec=5
+ StandardOutput=syslog
+ StandardError=syslog
+
+ [Install]
+ WantedBy=graphical.target
+
+
+bash
+Copy
+Edit
+sudo systemctl daemon-reload
+sudo systemctl enable  switch_listener.service   # run at every boot
+sudo systemctl start   switch_listener.service   # start now
+sudo journalctl -u switch_listener.service -f     # live log
+6 Using the Button
+Action	Result
+First press	Listener spawns the job (detached process group)
+Second press	Listener sends SIGTERM to the group → app exits
+Next press	Job starts again; pattern repeats
+
+Debounce time (DEBOUNCE constant) ensures stray bounces don’t register as multiple presses.
+
+7 Manual Control via systemctl
+Even with the switch in place, you can still manage everything with systemd:
+
+bash
+Copy
+Edit
+sudo systemctl stop    switch_listener.service     # stop listener and any running job
+sudo systemctl start   switch_listener.service     # start listener again
+sudo systemctl restart switch_listener.service     # quick restart
+sudo systemctl status  switch_listener.service     # health check
+If you split the long-running program into its own unit (my_job.service), replace toggle() with calls to systemctl start/stop my_job.service.
